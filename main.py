@@ -1,4 +1,5 @@
 import json
+import time
 import requests
 from web3.middleware import geth_poa_middleware
 from web3 import Web3
@@ -13,7 +14,6 @@ def write_json(data, path):
     with open(path, 'w') as json_file:
         json.dump(data, json_file, indent=2)
 
-optout_input = "0xf2a1f767"
 
 # Flare RPC connection
 rpcurl = "https://flare-api.flare.network/ext/C/rpc"
@@ -25,60 +25,66 @@ token_abi = read_json('token_abi.json')
 wflr_contract = web3.eth.contract(WFLR_ADDRESS, abi=token_abi)
 
 
-# Get distribution contract transactions
-def get_contract_transactions():
+DIST_ADDRESS = Web3.toChecksumAddress('0x9c7A4C83842B29bB4A082b0E689CB9474BD938d0')
+dist_abi = read_json('dist_contract_abi.json')
+dist_contract = web3.eth.contract(DIST_ADDRESS, abi=dist_abi)
+
+
+def get_wflr_holders():
+    holders_list = []
+    continue_fetch = True
     page = 1
-    tx = []
-    hasMore = True
-    while hasMore:
-        req = requests.get("https://flare-explorer.flare.network/api?module=account&action=txlist&address="
-                           + "0x9c7A4C83842B29bB4A082b0E689CB9474BD938d0" + "&page=" + "{}".format(page))
-        account_transactions_page = req.json()
-        if len(account_transactions_page['result']) == 0:
-            hasMore = False
-        else:
-            tx.append(account_transactions_page['result'])
+    while continue_fetch:
+        try:
+            req = requests.get(
+                "https://flare-explorer.flare.network/api?module=token&action=getTokenHolders&contractaddress=" +
+                "0x1d80c49bbbcd1c0911346656b529df9e5c2f783d" + "&page=" + "{}".format(page))
+            holders = req.json()
+        except: # Strict RATE LIMIT
+            print("Rate limit, waiting 2m for unblock before continuing")
+            time.sleep(120)
+            req = requests.get(
+                "https://flare-explorer.flare.network/api?module=token&action=getTokenHolders&contractaddress=" +
+                "0x1d80c49bbbcd1c0911346656b529df9e5c2f783d" + "&page=" + "{}".format(page))
+            holders = req.json()
+        for holder in holders['result']:
+            if Web3.fromWei(int(holder['value']), 'ether') > 1000000:
+                holders_list.append({
+                    'address': holder['address'],
+                    'amount': "{}".format(Web3.fromWei(int(holder['value']), 'ether'))
+                })
+            else:
+                continue_fetch = False
         page += 1
-    return tx
+    return holders_list
 
 
-# Add Opted out account to the list
-def add_account(account):
-    accounts = read_json('account.json')
-    for acc in accounts:
-        if acc['account'] == account:
-            return
-    accounts.append({
-        'account': account
-    })
-    write_json(accounts, 'account.json')
+def is_opted_out(address):
+    return dist_contract.functions.optOutCandidate(Web3.toChecksumAddress(address)).call()
 
 
-def get_accounts_from_tx(tx):
-    for page in tx:
-        for t in page:
-            if t['input'] == optout_input and t['txreceipt_status'] == '1':
-                add_account(t['from'])
+# Get WFLR holders(70 pages)
+wfl_holders = get_wflr_holders()
+write_json(wfl_holders, "wflr_holders.json")
 
+total_opted_out = 0
+opted_out = []
+for holder in wfl_holders:
+    try:
+        if is_opted_out(holder['address']):
+            total_opted_out += float(holder['amount'])
+            opted_out.append(holder)
+            print("Opted out SUM: {}".format(total_opted_out))
+    except: # Strict RATE LIMIT
+        print("Rate limit, waiting 2m for unblock before continuing")
+        time.sleep(120)
+        if is_opted_out(holder['address']):
+            total_opted_out += float(holder['amount'])
+            opted_out.append(holder)
+            print("Opted out SUM: {}".format(total_opted_out))
+write_json(opted_out, "opted_out.json")
 
-def calculate_opted_amounts():
-    tx = get_contract_transactions()
-    get_accounts_from_tx(tx)
-    total_excluded_amounts = 0
-    accounts = read_json('account.json')
-
-    for account in accounts:
-        amount = Web3.fromWei(wflr_contract.functions.balanceOf(Web3.toChecksumAddress(account['account'])).call(), 'ether')
-        total_excluded_amounts += amount
-
-    return total_excluded_amounts
-
-write_json([], "account.json")
-opted_out = round(calculate_opted_amounts(),1)
 total_wflr = round(Web3.fromWei(wflr_contract.functions.totalSupply().call(), 'ether'),1)
-accounts = read_json('account.json')
-
-print("Number of Accounts OptedOut: {}".format(len(accounts)))
-print("Amount of WFLR Opted Out: {}".format(opted_out))
-print("Total current WFLR eligible: {}".format(total_wflr - opted_out))
-
+print("Number of Accounts OptedOut: {}".format(len(opted_out)))
+print("Amount of WFLR Opted Out: {}".format(round(total_opted_out, 1)))
+print("Total current WFLR eligible: {}".format(total_wflr - int(total_opted_out)))
