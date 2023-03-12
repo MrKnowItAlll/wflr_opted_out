@@ -61,10 +61,11 @@ def get_accounts_from_tx(tx):
                 add_account(t['from'])
 
 
-def calculate_opted_amounts(accounts):
+def calculate_opted_amounts():
     tx = get_contract_transactions()
     get_accounts_from_tx(tx)
     total_excluded_amounts = 0
+    accounts = read_json('account.json')
 
     for account in accounts:
         amount = Web3.fromWei(wflr_contract.functions.balanceOf(Web3.toChecksumAddress(account['account'])).call(), 'ether')
@@ -72,10 +73,10 @@ def calculate_opted_amounts(accounts):
 
     return total_excluded_amounts
 
-
-accounts = read_json('account.json')
-opted_out = round(calculate_opted_amounts(accounts),1)
+write_json([], "account.json")
+opted_out = round(calculate_opted_amounts(),1)
 total_wflr = round(Web3.fromWei(wflr_contract.functions.totalSupply().call(), 'ether'),1)
+accounts = read_json('account.json')
 
 print("Number of Accounts OptedOut: {}".format(len(accounts)))
 print("Amount of WFLR Opted Out: {}".format(opted_out))
